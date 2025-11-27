@@ -3,121 +3,59 @@
 [![Rust](https://img.shields.io/badge/rust-1.70%2B-orange.svg)](https://www.rust-lang.org/)
 [![License](https://img.shields.io/badge/license-Apache%202.0-blue.svg)](LICENSE)
 
-**rs-agent** is a Rust implementation of the Lattice AI Agent Framework, providing clean abstractions for building production AI agents with LLMs, tool calling, retrieval-augmented memory, and multi-agent coordination.
+Rust implementation of the Lattice AI Agent Framework. `rs-agent` gives you a production-ready agent orchestrator with pluggable LLMs, tool calling (including UTCP), retrieval-capable memory, CodeMode execution, and multi-agent coordination.
 
-## Why rs-agent?
+## Highlights
+- **Single agent interface**: `Agent` orchestrates LLM calls, memory, tool invocations, file attachments, and TOON encoding.
+- **Pluggable models**: Feature-flagged adapters for Gemini, Ollama, Anthropic, and OpenAI behind the `LLM` trait.
+- **Tool system**: Implement the `Tool` trait once, register in the `ToolCatalog`, or bridge external tools via UTCP.
+- **Memory options**: `SessionMemory` with recent-context windowing, MMR reranking, and optional Postgres/Qdrant/Mongo stores.
+- **CodeMode + UTCP**: Ship `codemode.run_code` as a tool, or let the CodeMode orchestrator route natural language into tool chains.
+- **Multi-agent ready**: Compose coordinator/specialist agents, or register an agent as a UTCP provider for agent-as-a-tool workflows.
 
-Building production AI agents requires more than just LLM calls. You need:
+## Install
+- From git:
+  ```bash
+  cargo add rs-agent --git https://github.com/Protocol-Lattice/rs-agent
+  ```
+- To slim dependencies, disable defaults and pick features:
+  ```bash
+  cargo add rs-agent --git https://github.com/Protocol-Lattice/rs-agent \
+    --no-default-features --features "ollama"
+  ```
+- Defaults: `gemini`, `memory`. Enable other providers/backends via feature flags listed below.
 
-- **Pluggable LLM providers** that swap without rewriting logic
-- **Tool calling** that works across different model APIs
-- **Memory systems** that remember context across conversations
-- **Multi-agent coordination** for complex workflows
-- **Testing infrastructure** that doesn't hit external APIs
-
-rs-agent provides all of this with idiomatic Rust patterns and async support.
-
-## Features
-
-- 🧩 **Modular Architecture** – Compose agents from reusable components
-- 🤖 **Multi-Agent Support** – Coordinate specialist agents
-- 🔧 **Rich Tooling** – Implement the `Tool` trait once, use everywhere
-- 🧠 **Smart Memory** – RAG-powered memory with vector search
-- 🔌 **Model Agnostic** – Adapters for Gemini, Ollama, Anthropic, or bring your own
-- 📡 **UTCP Ready** – First-class Universal Tool Calling Protocol support
-- ⚡ **High Performance** – Built with Rust for speed and safety
-
-## Quick Start
-
-### Installation
-
-Add to your `Cargo.toml`:
-
-```toml
-[dependencies]
-rs-agent = { path = "../rs-agent" }
-tokio = { version = "1.41", features = ["full"] }
-```
-
-### Basic Usage
+## Quickstart
+Set `GOOGLE_API_KEY` (or `GEMINI_API_KEY`) for Gemini, or swap in any `LLM` implementation you control.
 
 ```rust
-use rs_agent::{Agent, AgentOptions};
+use rs_agent::{Agent, AgentOptions, GeminiLLM};
 use rs_agent::memory::{InMemoryStore, SessionMemory};
 use std::sync::Arc;
 
 #[tokio::main]
 async fn main() -> rs_agent::Result<()> {
-    // Create memory store
-    let store = Box::new(InMemoryStore::new());
-    let memory = Arc::new(SessionMemory::new(store, 10));
+    tracing_subscriber::fmt::init();
 
-    // Create model (implement your LLM trait)
-    let model = Arc::new(YourLLMImplementation::new());
+    let model = Arc::new(GeminiLLM::new("gemini-2.0-flash")?);
+    let memory = Arc::new(SessionMemory::new(Box::new(InMemoryStore::new()), 8));
 
-    // Create agent
     let agent = Agent::new(model, memory, AgentOptions::default())
-        .with_system_prompt("You are a helpful assistant");
+        .with_system_prompt("You are a concise Rust assistant.");
 
-    // Generate response
-    let response = agent
-        .generate("session_123", "What is Rust?")
-        .await?;
-
-    println!("{}", response);
+    let reply = agent.generate("demo-session", "Why use Rust for agents?").await?;
+    println!("{reply}");
     Ok(())
 }
 ```
 
-## Project Structure
-
-```
-rs-agent/
-├── src/
-│   ├── agent/       # Main agent orchestration
-│   ├── memory/      # Memory engine and vector stores
-│   ├── models/      # LLM provider adapters
-│   ├── tools/       # Tool system and catalog
-│   ├── types.rs     # Core type definitions
-│   └── error.rs     # Error types
-├── examples/        # Usage examples
-└── tests/          # Integration tests
-```
-
-## Core Concepts
-
-### Agent
-
-The `Agent` struct is the main orchestrator that handles:
-- LLM interactions
-- Memory management
-- Tool invocation
-- Context building
-
-### Memory System
-
-rs-agent includes a sophisticated memory system:
+## Add a Tool
+Register custom tools and they become part of the agent's context and invocation flow.
 
 ```rust
-use rs_agent::memory::{InMemoryStore, SessionMemory};
-use std::sync::Arc;
-
-let store = Box::new(InMemoryStore::new());
-let memory = Arc::new(SessionMemory::new(store, 10));
-```
-
-Features:
-- **Session-based** – Isolated conversations
-- **Context windowing** – Automatic trimming
-- **Vector search** – Semantic memory retrieval
-- **Multiple backends** – In-memory, PostgreSQL, Qdrant
-
-### Tool System
-
-Create custom tools by implementing the `Tool` trait:
-
-```rust
-use rs_agent::{Tool, ToolSpec, ToolRequest, ToolResponse, Result};
+use rs_agent::{Tool, ToolRequest, ToolResponse, ToolSpec, AgentError};
+use serde_json::json;
+use std::collections::HashMap;
 use async_trait::async_trait;
 
 struct EchoTool;
@@ -126,26 +64,23 @@ struct EchoTool;
 impl Tool for EchoTool {
     fn spec(&self) -> ToolSpec {
         ToolSpec {
-            name: "echo".to_string(),
-            description: "Echoes the input".to_string(),
-            input_schema: serde_json::json!({
+            name: "echo".into(),
+            description: "Echoes the provided input".into(),
+            input_schema: json!({
                 "type": "object",
-                "properties": {
-                    "input": {
-                        "type": "string",
-                        "description": "Text to echo"
-                    }
-                },
+                "properties": { "input": { "type": "string" } },
                 "required": ["input"]
             }),
             examples: None,
         }
     }
 
-    async fn invoke(&self, req: ToolRequest) -> Result<ToolResponse> {
-        let input = req.arguments.get("input")
+    async fn invoke(&self, req: ToolRequest) -> rs_agent::Result<ToolResponse> {
+        let input = req
+            .arguments
+            .get("input")
             .and_then(|v| v.as_str())
-            .unwrap_or("");
+            .ok_or_else(|| AgentError::ToolError("missing input".into()))?;
 
         Ok(ToolResponse {
             content: input.to_string(),
@@ -153,156 +88,64 @@ impl Tool for EchoTool {
         })
     }
 }
-```
 
-### UTCP Integration
+// After constructing an `agent` (see Quickstart), register and call the tool
+let catalog = agent.tools();
+catalog.register(Box::new(EchoTool))?;
 
-rs-agent integrates with the [Universal Tool Calling Protocol](https://github.com/universal-tool-calling-protocol) via `rs-utcp`, enabling cross-platform agent orchestration.
-
-```rust
-use rs_utcp::{
-    config::UtcpClientConfig,
-    providers::text::TextProvider,
-    repository::in_memory::InMemoryToolRepository,
-    tag::tag_search::TagSearchStrategy,
-    UtcpClient,
-};
-use std::collections::HashMap;
-use std::sync::Arc;
-
-let repo = Arc::new(InMemoryToolRepository::new());
-let search = Arc::new(TagSearchStrategy::new(repo.clone(), 1.0));
-let utcp = Arc::new(UtcpClient::create(UtcpClientConfig::new(), repo, search).await?);
-
-// Load tools from a UTCP provider and expose them to the agent
-let tools = agent
-    .register_utcp_provider(
-        utcp.clone(),
-        Arc::new(TextProvider::new("example".into(), Some("examples/utcp_tools".into()), None)),
-    )
-    .await?;
-
-// Invoke UTCP tool like any other registered tool
 let mut args = HashMap::new();
-args.insert("text".into(), serde_json::json!("hi"));
-let result = agent.invoke_tool("session", "example.echo", args).await?;
+args.insert("input".to_string(), json!("hi"));
+
+let response = agent.invoke_tool("session", "echo", args).await?;
 ```
 
-### CodeMode Orchestration
+## UTCP and CodeMode
+- **UTCP bridge**: Register UTCP providers and expose their tools through the `ToolCatalog`. Your agent can also self-register as a UTCP provider for agent-as-a-tool scenarios (see `examples/utcp_integration.rs`).
+- **CodeMode**: Exposes `codemode.run_code` and an optional Codemode orchestrator that turns natural language into tool chains or executable snippets. Integration patterns live in `src/agent/codemode.rs` and the agent tests.
 
-Enable CodeMode (powered by `rs-utcp`) to execute snippets or let the LLM orchestrate tools with generated code.
+## Memory and Context
+- `SessionMemory` keeps per-session short-term context with token-aware trimming.
+- MMR reranking (`mmr_rerank`) improves retrieval diversity when using embeddings.
+- Backends: in-memory by default; opt into Postgres (pgvector), Qdrant, or MongoDB via features.
+- Attach files to a generation call (`generate_with_files`) and encode results compactly with `generate_toon`.
 
-```rust
-use rs_agent::{Agent, AgentOptions, CodeModeUtcp};
-use rs_agent::memory::{InMemoryStore, SessionMemory};
-use std::collections::HashMap;
-use std::sync::Arc;
+## Examples
+Run the included examples to see common patterns:
+- Quickstart: `cargo run --example quickstart`
+- Tool catalog + custom tools: `cargo run --example tool_catalog`
+- Memory + checkpoint/restore + files: `cargo run --example memory_checkpoint`
+- Multi-agent coordination: `cargo run --example multi_agent`
+- UTCP integration + agent-as-tool: `cargo run --example utcp_integration`
 
-let codemode = Arc::new(CodeModeUtcp::new(utcp.clone()));
-let memory = Arc::new(SessionMemory::new(Box::new(InMemoryStore::new()), 8));
+## Feature Flags
+| Feature | Description | Default |
+|---------|-------------|---------|
+| `gemini` | Google Gemini LLM via `google-generative-ai-rs` | Yes (default) |
+| `ollama` | Local Ollama models via `ollama-rs` | No |
+| `anthropic` | Anthropic Claude via `anthropic-sdk` | No |
+| `openai` | OpenAI-compatible models via `async-openai` | No |
+| `memory` | Embeddings via `fastembed`; enables memory utilities | Yes (default) |
+| `postgres` | Postgres store with pgvector | No |
+| `qdrant` | Qdrant vector store | No |
+| `mongodb` | MongoDB-backed memory store | No |
+| `all-providers` | Enable all LLM providers | No |
+| `all-memory` | Enable all memory backends | No |
 
-// Register codemode.run_code and enable the orchestrator (defaults to the agent's model)
-let agent = Agent::new(model, memory, AgentOptions::default())
-    .with_codemode_orchestrator(codemode.clone(), None);
+## Environment
+| Variable | Purpose |
+|----------|---------|
+| `GOOGLE_API_KEY` or `GEMINI_API_KEY` | Required for `GeminiLLM` |
+| `ANTHROPIC_API_KEY` | Required for `AnthropicLLM` |
+| `OPENAI_API_KEY` | Required for `OpenAILLM` |
+| `OLLAMA_HOST` (optional) | Override Ollama host if not localhost |
+| Database connection strings | Supply to `PostgresStore::new`, `QdrantStore::new`, or `MongoStore::new` when those features are enabled |
 
-// Direct codemode execution
-let mut args = HashMap::new();
-args.insert("code".into(), serde_json::json!(r#"{"hello":"world"}"#));
-let _ = agent.invoke_tool("session", "codemode.run_code", args).await?;
-
-// Or natural language orchestration
-let reply = agent
-    .generate("session", "use the echo tool to say hi")
-    .await?;
-```
-
-## Configuration
-
-### Environment Variables
-
-| Variable | Description | Required |
-|----------|-------------|----------|
-| `GOOGLE_API_KEY` | Gemini API credentials | For Gemini models |
-| `ANTHROPIC_API_KEY` | Anthropic API credentials | For Anthropic models |
-
-## Development
-
-### Running Tests
-
-```bash
-cargo test
-```
-
-### Running Examples
-
-```bash
-# Quickstart example
-cargo run --example quickstart
-
-# Tool catalog and custom tools
-cargo run --example tool_catalog
-
-# Memory + checkpointing
-cargo run --example memory_checkpoint
-
-# Multi-agent example
-cargo run --example multi_agent
-
-# UTCP integration
-cargo run --example utcp_integration
-```
-
-## Features
-
-- `gemini` - Google Gemini LLM support (default)
-- `ollama` - Ollama local LLM support
-- `anthropic` - Anthropic Claude support
-- `memory` - Memory and embedding support (default)
-- `postgres` - PostgreSQL backend for memory
-- `qdrant` - Qdrant vector database support
-- `all-providers` - All LLM providers
-- `all-memory` - All memory backends
-
-## Roadmap
-
-- [ ] Gemini LLM implementation
-- [ ] Ollama LLM implementation
-- [ ] Anthropic LLM implementation
-- [ ] PostgreSQL memory backend
-- [ ] Qdrant memory backend
-- [ ] Streaming support
-- [ ] Tool orchestrator (LLM-driven tool selection)
-- [ ] Code mode integration
-- [ ] Sub-agent support
-- [ ] Checkpoint/restore optimization
-
-## Comparison with go-agent
-
-rs-agent is a Rust port of [go-agent](https://github.com/Protocol-Lattice/go-agent), maintaining feature parity while leveraging Rust's:
-
-- **Memory safety** without garbage collection
-- **Zero-cost abstractions** for performance
-- **Async/await** for efficient concurrency
-- **Type system** for compile-time guarantees
+## Status and Roadmap
+- Already in place: Agent orchestrator, LLM adapters (Gemini/Ollama/Anthropic/OpenAI), tool catalog, UTCP bridge + agent-as-tool, CodeMode integration, memory backends (in-memory/Postgres/Qdrant/Mongo), checkpoint/restore, TOON encoding, examples and unit tests.
+- Next focus: streaming responses, richer retrieval evaluation, tighter UTCP tool discovery/search ergonomics, and more end-to-end tutorials.
 
 ## Contributing
-
-We welcome contributions! Please:
-
-1. Fork the repository
-2. Create a feature branch
-3. Make your changes with tests
-4. Submit a pull request
+Issues and PRs are welcome! Please format (`cargo fmt`), lint (`cargo clippy`), and add tests where it makes sense.
 
 ## License
-
-This project is licensed under the Apache 2.0 License - see the [LICENSE](LICENSE) file for details.
-
-## Acknowledgments
-
-- Inspired by [go-agent](https://github.com/Protocol-Lattice/go-agent)
-- Built on [rs-utcp](https://github.com/Protocol-Lattice/rs-utcp)
-
----
-
-**Star us on GitHub** if you find rs-agent useful! ⭐
+Apache 2.0. See `LICENSE`.
