@@ -1,0 +1,91 @@
+[package]
+name = "rs-agent"
+version = "0.1.0"
+edition = "2021"
+authors = ["Protocol Lattice Team"]
+description = "Lattice AI Agent Framework for Rust - Build production AI agents with clean abstractions"
+license = "Apache-2.0"
+repository = "https://github.com/Protocol-Lattice/rs-agent"
+keywords = ["ai", "agent", "llm", "rag", "utcp"]
+categories = ["api-bindings", "development-tools"]
+
+[dependencies]
+# Async runtime
+tokio = { version = "1.41", features = ["full"] }
+async-trait = "0.1"
+
+# Error handling
+thiserror = "2.0"
+anyhow = "1.0"
+
+# Serialization
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+
+# HTTP client
+reqwest = { version = "0.12", features = ["json", "stream"] }
+
+# UTCP integration
+rs-utcp = { path = "../rs-utcp" }
+
+# LLM providers (features)
+google-generative-ai-rs = { version = "0.3", optional = true }
+
+# Memory and embeddings
+fastembed = { version = "4.2", optional = true }
+
+# Database backends
+sqlx = { version = "0.8", features = ["runtime-tokio", "postgres", "uuid", "chrono"], optional = true }
+qdrant-client = { version = "1.12", optional = true }
+mongodb = { version = "3.1", optional = true }
+
+# LLM clients
+anthropic-sdk = { version = "0.1", optional = true }
+ollama-rs = { version = "0.2", optional = true }
+async-openai = { version = "0.23", optional = true }
+
+# Utilities
+uuid = { version = "1.11", features = ["v4", "serde"] }
+chrono = { version = "0.4", features = ["serde"] }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+futures = "0.3"
+parking_lot = "0.12"
+base64 = "0.22"
+toon-format = "0.4.0"
+
+[dev-dependencies]
+tokio-test = "0.4"
+
+[features]
+default = ["gemini", "memory"]
+gemini = ["google-generative-ai-rs"]
+ollama = ["ollama-rs"]
+anthropic = ["anthropic-sdk"]
+openai = ["async-openai"]
+memory = ["fastembed"]
+postgres = ["sqlx"]
+qdrant = ["qdrant-client"]
+mongodb = ["dep:mongodb"]
+all-providers = ["gemini", "ollama", "anthropic", "openai"]
+all-memory = ["memory", "postgres", "qdrant", "mongodb"]
+
+[[example]]
+name = "quickstart"
+path = "examples/quickstart.rs"
+
+[[example]]
+name = "tool_catalog"
+path = "examples/tool_catalog.rs"
+
+[[example]]
+name = "memory_checkpoint"
+path = "examples/memory_checkpoint.rs"
+
+[[example]]
+name = "multi_agent"
+path = "examples/multi_agent.rs"
+
+[[example]]
+name = "utcp_integration"
+path = "examples/utcp_integration.rs"

@@ -1,0 +1,27 @@
+[
+  {
+    "name": "echo",
+    "description": "Echoes a piece of text",
+    "inputs": {
+      "type": "object",
+      "properties": {
+        "text": {
+          "type": "string",
+          "description": "Text to echo back"
+        }
+      },
+      "required": ["text"]
+    },
+    "outputs": {
+      "type": "object",
+      "properties": {
+        "content": {
+          "type": "string",
+          "description": "Echoed result"
+        }
+      },
+      "required": ["content"]
+    },
+    "tags": ["example", "echo"]
+  }
+]

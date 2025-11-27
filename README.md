@@ -188,6 +188,34 @@ args.insert("text".into(), serde_json::json!("hi"));
 let result = agent.invoke_tool("session", "example.echo", args).await?;
 ```
 
+### CodeMode Orchestration
+
+Enable CodeMode (powered by `rs-utcp`) to execute snippets or let the LLM orchestrate tools with generated code.
+
+```rust
+use rs_agent::{Agent, AgentOptions, CodeModeUtcp};
+use rs_agent::memory::{InMemoryStore, SessionMemory};
+use std::collections::HashMap;
+use std::sync::Arc;
+
+let codemode = Arc::new(CodeModeUtcp::new(utcp.clone()));
+let memory = Arc::new(SessionMemory::new(Box::new(InMemoryStore::new()), 8));
+
+// Register codemode.run_code and enable the orchestrator (defaults to the agent's model)
+let agent = Agent::new(model, memory, AgentOptions::default())
+    .with_codemode_orchestrator(codemode.clone(), None);
+
+// Direct codemode execution
+let mut args = HashMap::new();
+args.insert("code".into(), serde_json::json!(r#"{"hello":"world"}"#));
+let _ = agent.invoke_tool("session", "codemode.run_code", args).await?;
+
+// Or natural language orchestration
+let reply = agent
+    .generate("session", "use the echo tool to say hi")
+    .await?;
+```
+
 ## Configuration
 
 ### Environment Variables
