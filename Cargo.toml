@@ -1,6 +1,6 @@
 [package]
 name = "rs-agent"
-version = "0.1.0"
+version = "1.0.0"
 edition = "2021"
 authors = ["Protocol Lattice Team"]
 description = "Lattice AI Agent Framework for Rust - Build production AI agents with clean abstractions"
@@ -26,8 +26,7 @@ serde_json = "1.0"
 reqwest = { version = "0.12", features = ["json", "stream"] }
 
 # UTCP integration
-rs-utcp = { path = "../rs-utcp" }
-
+rs-utcp = "0.2.1"
 # LLM providers (features)
 google-generative-ai-rs = { version = "0.3", optional = true }
 
