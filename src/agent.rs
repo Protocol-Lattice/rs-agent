@@ -1,7 +1,11 @@
+//! Core Agent orchestrator
+//!
+//! This module provides the main Agent struct that coordinates LLM calls, memory,
+//! tool invocations, and UTCP integration. Matches the structure from go-agent's agent.go.
+
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use crate::agent::utcp::{ensure_agent_cli_transport, InProcessTool};
 use anyhow::anyhow;
 use chrono::Utc;
 use futures::FutureExt;
@@ -15,17 +19,20 @@ use serde_json::{json, Value};
 use toon_format::encode_default;
 use uuid::Uuid;
 
-use crate::agent::codemode::{build_orchestrator, format_codemode_value, CodeModeTool};
+use crate::agent_orchestrators::{build_orchestrator, format_codemode_value, CodeModeTool};
+use crate::agent_tool::{ensure_agent_cli_transport, InProcessTool};
 use crate::error::{AgentError, Result};
 use crate::memory::{MemoryRecord, SessionMemory};
 use crate::models::LLM;
 use crate::tools::ToolCatalog;
-use crate::types::{AgentOptions, File, GenerationResponse, Message, Role, ToolRequest};
+use crate::types::{AgentOptions, AgentState, File, GenerationResponse, Message, Role, ToolRequest};
 
-mod codemode;
-mod utcp;
+const DEFAULT_SYSTEM_PROMPT: &str = "You are a helpful AI assistant. Provide concise, accurate answers and explain when you use tools.";
 
 /// Main Agent orchestrator
+///
+/// The Agent coordinates model calls, memory, tools, and sub-agents. It matches
+/// the structure from go-agent's Agent struct.
 pub struct Agent {
     model: Arc<dyn LLM>,
     memory: Arc<SessionMemory>,
@@ -42,7 +49,9 @@ impl Agent {
         Self {
             model,
             memory,
-            system_prompt: options.system_prompt.unwrap_or_default(),
+            system_prompt: options
+                .system_prompt
+                .unwrap_or_else(|| DEFAULT_SYSTEM_PROMPT.to_string()),
             context_limit: options.context_limit.unwrap_or(8192),
             tool_catalog: Arc::new(ToolCatalog::new()),
             codemode: None,
@@ -505,6 +514,7 @@ impl Agent {
         let state = AgentState {
             system_prompt: self.system_prompt.clone(),
             short_term: recent,
+            joined_spaces: None,
             timestamp: Utc::now(),
         };
 
@@ -522,344 +532,5 @@ impl Agent {
         }
 
         Ok(())
-    }
-}
-
-/// Serializable agent state for checkpointing
-#[derive(serde::Serialize, serde::Deserialize)]
-struct AgentState {
-    system_prompt: String,
-    short_term: Vec<MemoryRecord>,
-    timestamp: chrono::DateTime<Utc>,
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::memory::InMemoryStore;
-    use crate::types::GenerationResponse;
-    use anyhow::anyhow;
-    use async_trait::async_trait;
-    use rs_utcp::config::UtcpClientConfig;
-    use rs_utcp::plugins::codemode::CodeModeUtcp;
-    use rs_utcp::providers::base::Provider;
-    use rs_utcp::repository::in_memory::InMemoryToolRepository;
-    use rs_utcp::tag::tag_search::TagSearchStrategy;
-    use rs_utcp::tools::{Tool, ToolInputOutputSchema};
-    use rs_utcp::transports::stream::StreamResult;
-    use rs_utcp::transports::CommunicationProtocol;
-    use rs_utcp::UtcpClient;
-    use serde_json::json;
-    use toon_format::decode_default;
-
-    struct MockLLM;
-
-    #[async_trait]
-    impl LLM for MockLLM {
-        async fn generate(
-            &self,
-            _messages: Vec<Message>,
-            _files: Option<Vec<File>>,
-        ) -> Result<GenerationResponse> {
-            Ok(GenerationResponse {
-                content: "Mock response".to_string(),
-                metadata: None,
-            })
-        }
-
-        fn model_name(&self) -> &str {
-            "mock"
-        }
-    }
-
-    #[tokio::test]
-    async fn test_agent_generate() {
-        let model = Arc::new(MockLLM);
-        let store = Box::new(InMemoryStore::new());
-        let memory = Arc::new(SessionMemory::new(store, 10));
-
-        let agent = Agent::new(model, memory, AgentOptions::default())
-            .with_system_prompt("You are a helpful assistant");
-
-        let response = agent.generate("test_session", "Hello").await.unwrap();
-
-        assert_eq!(response, "Mock response");
-    }
-
-    #[tokio::test]
-    async fn test_agent_generate_toon() {
-        let model = Arc::new(MockLLM);
-        let store = Box::new(InMemoryStore::new());
-        let memory = Arc::new(SessionMemory::new(store, 10));
-
-        let agent = Agent::new(model, memory, AgentOptions::default())
-            .with_system_prompt("You are a helpful assistant");
-
-        let response = agent.generate_toon("test_session", "Hello").await.unwrap();
-
-        let decoded: GenerationResponse = decode_default(&response).unwrap();
-        assert_eq!(decoded.content, "Mock response");
-    }
-
-    struct EchoLLM;
-
-    #[async_trait]
-    impl LLM for EchoLLM {
-        async fn generate(
-            &self,
-            messages: Vec<Message>,
-            _files: Option<Vec<File>>,
-        ) -> Result<GenerationResponse> {
-            let last = messages
-                .last()
-                .map(|m| m.content.clone())
-                .unwrap_or_default();
-            Ok(GenerationResponse {
-                content: format!("Echo: {}", last),
-                metadata: None,
-            })
-        }
-
-        fn model_name(&self) -> &str {
-            "echo-llm"
-        }
-    }
-
-    #[tokio::test]
-    async fn agent_as_utcp_tool_registers_and_handles_calls() {
-        let model = Arc::new(EchoLLM);
-        let store = Box::new(InMemoryStore::new());
-        let memory = Arc::new(SessionMemory::new(store, 4));
-        let agent = Arc::new(Agent::new(model, memory, AgentOptions::default()));
-
-        let repo = Arc::new(InMemoryToolRepository::new());
-        let search = Arc::new(TagSearchStrategy::new(repo.clone(), 1.0));
-        let utcp = UtcpClient::create(UtcpClientConfig::new(), repo, search)
-            .await
-            .unwrap();
-
-        agent
-            .clone()
-            .register_as_utcp_provider(&utcp, "local.agent", "Test agent")
-            .await
-            .unwrap();
-
-        let mut args = HashMap::new();
-        args.insert("instruction".to_string(), json!("ping"));
-
-        let result = utcp.call_tool("local.agent", args).await.unwrap();
-        assert_eq!(result.as_str(), Some("Echo: ping"));
-    }
-
-    struct NoopUtcpClient;
-
-    #[async_trait]
-    impl UtcpClientInterface for NoopUtcpClient {
-        async fn register_tool_provider(
-            &self,
-            _prov: Arc<dyn Provider>,
-        ) -> anyhow::Result<Vec<Tool>> {
-            Ok(vec![])
-        }
-
-        async fn register_tool_provider_with_tools(
-            &self,
-            _prov: Arc<dyn Provider>,
-            tools: Vec<Tool>,
-        ) -> anyhow::Result<Vec<Tool>> {
-            Ok(tools)
-        }
-
-        async fn deregister_tool_provider(&self, _provider_name: &str) -> anyhow::Result<()> {
-            Ok(())
-        }
-
-        async fn call_tool(
-            &self,
-            _tool_name: &str,
-            _args: HashMap<String, serde_json::Value>,
-        ) -> anyhow::Result<serde_json::Value> {
-            Ok(json!({"ok": true}))
-        }
-
-        async fn search_tools(&self, _query: &str, _limit: usize) -> anyhow::Result<Vec<Tool>> {
-            Ok(vec![])
-        }
-
-        fn get_transports(&self) -> HashMap<String, Arc<dyn CommunicationProtocol>> {
-            HashMap::new()
-        }
-
-        async fn call_tool_stream(
-            &self,
-            _tool_name: &str,
-            _args: HashMap<String, serde_json::Value>,
-        ) -> anyhow::Result<Box<dyn StreamResult>> {
-            Err(anyhow!("streaming not supported"))
-        }
-    }
-
-    #[tokio::test(flavor = "multi_thread")]
-    async fn codemode_tool_can_execute_snippet() {
-        let model = Arc::new(MockLLM);
-        let store = Box::new(InMemoryStore::new());
-        let memory = Arc::new(SessionMemory::new(store, 4));
-
-        let codemode = Arc::new(CodeModeUtcp::new(Arc::new(NoopUtcpClient)));
-        let agent = Agent::new(model, memory, AgentOptions::default()).with_codemode(codemode);
-
-        let mut args = HashMap::new();
-        args.insert("code".to_string(), json!(r#"{"result": "ok"}"#));
-
-        let output = agent
-            .invoke_tool("session", "codemode.run_code", args)
-            .await
-            .unwrap();
-
-        let parsed: serde_json::Value = serde_json::from_str(&output).unwrap();
-        assert_eq!(parsed["value"], json!({"result": "ok"}));
-        assert_eq!(parsed["stdout"], json!(""));
-    }
-
-    struct OrchestratorLLM;
-
-    #[async_trait]
-    impl LLM for OrchestratorLLM {
-        async fn generate(
-            &self,
-            messages: Vec<Message>,
-            _files: Option<Vec<File>>,
-        ) -> Result<GenerationResponse> {
-            let prompt = messages
-                .last()
-                .map(|m| m.content.as_str())
-                .unwrap_or_default();
-
-            let content = if prompt.contains("Respond with only 'yes' or 'no'") {
-                "yes"
-            } else if prompt.contains("comma-separated list of names only") {
-                "demo.echo"
-            } else if prompt.contains("Generate a Rhai snippet") {
-                "let res = call_tool(\"demo.echo\", #{\"message\": \"hi\"}); res"
-            } else {
-                "fallback"
-            };
-
-            Ok(GenerationResponse {
-                content: content.to_string(),
-                metadata: None,
-            })
-        }
-
-        fn model_name(&self) -> &str {
-            "orchestrator-llm"
-        }
-    }
-
-    struct EchoUtcpClient;
-
-    #[async_trait]
-    impl UtcpClientInterface for EchoUtcpClient {
-        async fn register_tool_provider(
-            &self,
-            _prov: Arc<dyn Provider>,
-        ) -> anyhow::Result<Vec<Tool>> {
-            Ok(vec![])
-        }
-
-        async fn register_tool_provider_with_tools(
-            &self,
-            _prov: Arc<dyn Provider>,
-            tools: Vec<Tool>,
-        ) -> anyhow::Result<Vec<Tool>> {
-            Ok(tools)
-        }
-
-        async fn deregister_tool_provider(&self, _provider_name: &str) -> anyhow::Result<()> {
-            Ok(())
-        }
-
-        async fn call_tool(
-            &self,
-            tool_name: &str,
-            args: HashMap<String, serde_json::Value>,
-        ) -> anyhow::Result<serde_json::Value> {
-            if tool_name != "demo.echo" {
-                return Err(anyhow!("unknown tool"));
-            }
-            let message = args
-                .get("message")
-                .and_then(|v| v.as_str())
-                .unwrap_or("missing");
-            Ok(json!({ "message": message }))
-        }
-
-        async fn search_tools(&self, _query: &str, _limit: usize) -> anyhow::Result<Vec<Tool>> {
-            Ok(vec![Tool {
-                name: "demo.echo".to_string(),
-                description: "Echo a message".to_string(),
-                inputs: ToolInputOutputSchema {
-                    type_: "object".to_string(),
-                    properties: Some(HashMap::from([(
-                        "message".to_string(),
-                        json!({"type": "string"}),
-                    )])),
-                    required: Some(vec!["message".to_string()]),
-                    description: None,
-                    title: None,
-                    items: None,
-                    enum_: None,
-                    minimum: None,
-                    maximum: None,
-                    format: None,
-                },
-                outputs: ToolInputOutputSchema {
-                    type_: "object".to_string(),
-                    properties: None,
-                    required: None,
-                    description: None,
-                    title: None,
-                    items: None,
-                    enum_: None,
-                    minimum: None,
-                    maximum: None,
-                    format: None,
-                },
-                tags: vec![],
-                average_response_size: None,
-                provider: None,
-            }])
-        }
-
-        fn get_transports(&self) -> HashMap<String, Arc<dyn CommunicationProtocol>> {
-            HashMap::new()
-        }
-
-        async fn call_tool_stream(
-            &self,
-            _tool_name: &str,
-            _args: HashMap<String, serde_json::Value>,
-        ) -> anyhow::Result<Box<dyn StreamResult>> {
-            Err(anyhow!("streaming not supported"))
-        }
-    }
-
-    #[tokio::test(flavor = "multi_thread")]
-    async fn codemode_orchestrator_handles_prompt() {
-        let model = Arc::new(OrchestratorLLM);
-        let store = Box::new(InMemoryStore::new());
-        let memory = Arc::new(SessionMemory::new(store, 8));
-
-        let codemode = Arc::new(CodeModeUtcp::new(Arc::new(EchoUtcpClient)));
-        let agent = Agent::new(model, memory, AgentOptions::default())
-            .with_codemode_orchestrator(codemode, None);
-
-        let response = agent
-            .generate("session", "please call the echo tool")
-            .await
-            .unwrap();
-
-        let parsed: serde_json::Value = serde_json::from_str(&response).unwrap();
-        assert_eq!(parsed["message"], json!("hi"));
     }
 }

@@ -1,3 +1,8 @@
+//! UTCP tool integration and adapters
+//!
+//! This module provides the bridge between rs-agent and UTCP tools, matching the
+//! structure from go-agent's agent_tool.go.
+
 use std::collections::HashMap;
 use std::sync::Arc;
 
@@ -13,19 +18,21 @@ use rs_utcp::transports::CommunicationProtocol;
 use serde_json::Value;
 
 /// Handler type for in-process UTCP tools.
-pub(crate) type InProcessHandler =
+pub type InProcessHandler =
     Arc<dyn Fn(HashMap<String, Value>) -> BoxFuture<'static, Result<Value>> + Send + Sync>;
 
 /// UTCP tool paired with an in-process handler.
 #[derive(Clone)]
-pub(crate) struct InProcessTool {
+pub struct InProcessTool {
     pub spec: UtcpTool,
     pub handler: InProcessHandler,
 }
 
 /// Transport shim that routes CLI providers to in-process handlers while
 /// delegating everything else to the original transport.
-pub(crate) struct AgentCliTransport {
+///
+/// This matches go-agent's agentCLITransport structure.
+pub struct AgentCliTransport {
     inner: Arc<dyn CommunicationProtocol>,
     tools: RwLock<HashMap<String, Vec<InProcessTool>>>,
 }
@@ -119,7 +126,7 @@ impl CommunicationProtocol for AgentCliTransport {
 }
 
 /// Register (or retrieve) the global agent CLI transport, ensuring it replaces the default CLI transport.
-pub(crate) fn ensure_agent_cli_transport() -> Arc<AgentCliTransport> {
+pub fn ensure_agent_cli_transport() -> Arc<AgentCliTransport> {
     use std::sync::OnceLock;
 
     static TRANSPORT: OnceLock<Arc<AgentCliTransport>> = OnceLock::new();
@@ -137,4 +144,15 @@ pub(crate) fn ensure_agent_cli_transport() -> Arc<AgentCliTransport> {
             shim
         })
         .clone()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn agent_cli_transport_initializes() {
+        let transport = ensure_agent_cli_transport();
+        assert!(transport.specs_for("nonexistent").is_none());
+    }
 }

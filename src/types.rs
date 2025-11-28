@@ -74,3 +74,48 @@ impl Default for AgentOptions {
         }
     }
 }
+
+// ============================================================================
+// SubAgent System (matching go-agent's types.go)
+// ============================================================================
+
+use crate::error::Result;
+use crate::memory::MemoryRecord;
+use async_trait::async_trait;
+use chrono::{DateTime, Utc};
+use std::sync::Arc;
+
+/// SubAgent represents a specialist agent that can be delegated work.
+#[async_trait]
+pub trait SubAgent: Send + Sync {
+    /// Returns the name of the sub-agent
+    fn name(&self) -> String;
+
+    /// Returns the description of what the sub-agent does
+    fn description(&self) -> String;
+
+    /// Runs the sub-agent with the given input and returns the result
+    async fn run(&self, input: String) -> Result<String>;
+}
+
+/// SubAgentDirectory stores sub-agents by name while preserving insertion order.
+pub trait SubAgentDirectory: Send + Sync {
+    /// Register a sub-agent. Duplicate names return an error.
+    fn register(&self, subagent: Arc<dyn SubAgent>) -> Result<()>;
+
+    /// Lookup a sub-agent by name
+    fn lookup(&self, name: &str) -> Option<Arc<dyn SubAgent>>;
+
+    /// Returns all registered sub-agents in registration order
+    fn all(&self) -> Vec<Arc<dyn SubAgent>>;
+}
+
+/// AgentState represents the serializable state of an agent for checkpointing.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AgentState {
+    pub system_prompt: String,
+    pub short_term: Vec<MemoryRecord>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub joined_spaces: Option<Vec<String>>,
+    pub timestamp: DateTime<Utc>,
+}

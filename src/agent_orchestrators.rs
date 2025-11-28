@@ -1,3 +1,8 @@
+//! CodeMode orchestration and tool integration
+//!
+//! This module handles the integration of CodeMode with the agent system,
+//! matching the structure from go-agent's agent_orchestrators.go.
+
 use std::collections::HashMap;
 use std::sync::Arc;
 
@@ -14,6 +19,8 @@ use crate::tools::Tool;
 use crate::types::{Message, Role, ToolRequest, ToolResponse, ToolSpec};
 
 /// Adapter that exposes the UTCP CodeMode runtime as a tool in the agent catalog.
+///
+/// This allows agents to execute code snippets via the `codemode.run_code` tool.
 pub struct CodeModeTool {
     engine: Arc<CodeModeUtcp>,
 }
@@ -73,6 +80,9 @@ impl Tool for CodeModeTool {
 }
 
 /// Bridge that lets the CodeMode orchestrator reuse an `rs-agent` LLM.
+///
+/// This adapter allows the CodeMode orchestrator to call into any LLM provider
+/// that implements the rs-agent LLM trait.
 pub struct CodemodeLlmAdapter {
     llm: Arc<dyn LLM>,
 }
@@ -103,18 +113,22 @@ impl LlmModel for CodemodeLlmAdapter {
     }
 }
 
-/// Convenience to format orchestrator output for agent responses.
+/// Builds a CodeMode orchestrator with the given engine and LLM.
+///
+/// The orchestrator can automatically route natural language queries to tool chains
+/// or executable code snippets.
+pub fn build_orchestrator(engine: Arc<CodeModeUtcp>, llm: Arc<dyn LLM>) -> CodemodeOrchestrator {
+    let adapter = CodemodeLlmAdapter::new(llm);
+    CodemodeOrchestrator::new(engine, Arc::new(adapter))
+}
+
+/// Convenience function to format orchestrator output for agent responses.
 pub fn format_codemode_value(value: &Value) -> String {
     if let Some(s) = value.as_str() {
         return s.to_string();
     }
 
     serde_json::to_string(value).unwrap_or_else(|_| format!("{value:?}"))
-}
-
-pub fn build_orchestrator(engine: Arc<CodeModeUtcp>, llm: Arc<dyn LLM>) -> CodemodeOrchestrator {
-    let adapter = CodemodeLlmAdapter::new(llm);
-    CodemodeOrchestrator::new(engine, Arc::new(adapter))
 }
 
 fn serialize_result(result: &CodeModeResult) -> String {
@@ -139,4 +153,25 @@ fn strip_code_fence(s: &str) -> String {
     }
 
     inner.trim().to_string()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn strip_code_fence_removes_markdown_fences() {
+        assert_eq!(strip_code_fence("```rust\nlet x = 5;\n```"), "let x = 5;");
+        assert_eq!(strip_code_fence("```\ncode\n```"), "code");
+        assert_eq!(strip_code_fence("plain text"), "plain text");
+    }
+
+    #[test]
+    fn format_codemode_value_handles_strings_and_json() {
+        assert_eq!(format_codemode_value(&Value::String("test".into())), "test");
+        assert_eq!(
+            format_codemode_value(&Value::Number(42.into())),
+            "42"
+        );
+    }
 }

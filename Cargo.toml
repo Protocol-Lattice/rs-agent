@@ -1,6 +1,6 @@
 [package]
 name = "rs-agent"
-version = "1.0.0"
+version = "1.0.1"
 edition = "2021"
 authors = ["Protocol Lattice Team"]
 description = "Lattice AI Agent Framework for Rust - Build production AI agents with clean abstractions"

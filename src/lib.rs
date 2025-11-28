@@ -23,22 +23,29 @@
 //! ```
 
 pub mod agent;
+pub mod agent_orchestrators;
+pub mod agent_tool;
+pub mod catalog;
 pub mod error;
+pub mod helpers;
 pub mod memory;
 pub mod models;
+pub mod query;
 pub mod tools;
 pub mod types;
 pub mod utcp;
 
 // Re-export commonly used types
 pub use agent::Agent;
+pub use catalog::{StaticSubAgentDirectory, StaticToolCatalog};
 pub use error::{AgentError, Result};
 pub use memory::{mmr_rerank, InMemoryStore, MemoryRecord, MemoryStore, SessionMemory};
 pub use models::LLM;
 pub use rs_utcp::plugins::codemode::{CodeModeArgs, CodeModeUtcp, CodemodeOrchestrator};
 pub use tools::{Tool, ToolCatalog};
 pub use types::{
-    AgentOptions, File, GenerationResponse, Message, Role, ToolRequest, ToolResponse, ToolSpec,
+    AgentOptions, AgentState, File, GenerationResponse, Message, Role, SubAgent,
+    SubAgentDirectory, ToolRequest, ToolResponse, ToolSpec,
 };
 
 // Re-export memory backends
