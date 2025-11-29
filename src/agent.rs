@@ -286,21 +286,8 @@ impl Agent {
         Ok(())
     }
 
-    /// Generates a response for the given user input
+    /// Generates a response for the given user input, encoded as TOON
     pub async fn generate(
-        &self,
-        session_id: impl Into<String>,
-        user_input: impl Into<String>,
-    ) -> Result<String> {
-        let response = self
-            .generate_internal(session_id.into(), user_input.into(), None)
-            .await?;
-
-        Ok(response.content)
-    }
-
-    /// Generates a response encoded as TOON for token-efficient downstream parsing
-    pub async fn generate_toon(
         &self,
         session_id: impl Into<String>,
         user_input: impl Into<String>,
